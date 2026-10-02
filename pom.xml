@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/>
+	</parent>
+	<groupId>com.uade</groupId>
+	<artifactId>microservice-ticketing-gp</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>microservice-ticketing-gp</name>
+	<description>Microservicio ETL de Entradas F1 Ticketing SOAP para Grand Prix Tracker</description>
+
+	<properties>
+		<java.version>21</java.version>
+		<maven.compiler.source>21</maven.compiler.source>
+		<maven.compiler.target>21</maven.compiler.target>
+		<cxf.version>4.0.5</cxf.version>
+		<!-- Ubicación por defecto del WSDL (archivo empaquetado para compilación offline garantizada).
+		     Si la variable de entorno TICKETING_WSDL_URL está definida, el profile 'env-wsdl' la utiliza automáticamente -->
+		<ticketing.wsdl.url>${project.basedir}/src/main/resources/wsdl/ticketing.wsdl</ticketing.wsdl.url>
+	</properties>
+
+	<profiles>
+		<profile>
+			<id>env-wsdl</id>
+			<activation>
+				<property>
+					<name>env.TICKETING_WSDL_URL</name>
+				</property>
+			</activation>
+			<properties>
+				<ticketing.wsdl.url>${env.TICKETING_WSDL_URL}</ticketing.wsdl.url>
+			</properties>
+		</profile>
+	</profiles>
+
+	<dependencies>
+		<!-- Spring Boot Starter Web y Actuator -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+
+		<!-- Spring Data JPA y PostgreSQL -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Jakarta XML WS / JAX-WS API y Runtime -->
+		<dependency>
+			<groupId>jakarta.xml.ws</groupId>
+			<artifactId>jakarta.xml.ws-api</artifactId>
+			<version>4.0.2</version>
+		</dependency>
+		<dependency>
+			<groupId>jakarta.jws</groupId>
+			<artifactId>jakarta.jws-api</artifactId>
+			<version>3.0.0</version>
+		</dependency>
+		<dependency>
+			<groupId>jakarta.xml.bind</groupId>
+			<artifactId>jakarta.xml.bind-api</artifactId>
+			<version>4.0.2</version>
+		</dependency>
+
+		<!-- Implementación de JAX-WS Runtime (com.sun.xml.ws) para llamadas de cliente SOAP -->
+		<dependency>
+			<groupId>com.sun.xml.ws</groupId>
+			<artifactId>jaxws-rt</artifactId>
+			<version>4.0.2</version>
+		</dependency>
+
+		<!-- Testing -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<!-- Plugin de compilación -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>21</source>
+					<target>21</target>
+					<parameters>true</parameters>
+				</configuration>
+			</plugin>
+
+			<!-- Spring Boot Maven Plugin -->
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+
+			<!-- CXF Codegen Plugin para generar las clases cliente (stubs) a partir del WSDL -->
+			<plugin>
+				<groupId>org.apache.cxf</groupId>
+				<artifactId>cxf-codegen-plugin</artifactId>
+				<version>${cxf.version}</version>
+				<executions>
+					<execution>
+						<id>generate-sources</id>
+						<phase>generate-sources</phase>
+						<configuration>
+							<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+							<wsdlOptions>
+								<wsdlOption>
+									<wsdl>${ticketing.wsdl.url}</wsdl>
+									<extraargs>
+										<extraarg>-validate=none</extraarg>
+									</extraargs>
+								</wsdlOption>
+							</wsdlOptions>
+						</configuration>
+						<goals>
+							<goal>wsdl2java</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

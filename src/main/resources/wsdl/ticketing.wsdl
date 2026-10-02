@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:sch="http://f1.ticketing.soap/legacy"
+                  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+                  xmlns:tns="http://f1.ticketing.soap/legacy"
+                  targetNamespace="http://f1.ticketing.soap/legacy">
+
+  <wsdl:types>
+    <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+               elementFormDefault="qualified"
+               targetNamespace="http://f1.ticketing.soap/legacy">
+
+      <!-- Definición del tipo de dato InventarioGrada -->
+      <xs:complexType name="InventarioGrada">
+        <xs:sequence>
+          <xs:element minOccurs="0" name="id" type="xs:long"/>
+          <xs:element name="codigoEvento" type="xs:string"/>
+          <xs:element name="carrera" type="xs:string"/>
+          <xs:element name="fechaCarrera" type="xs:date"/>
+          <xs:element name="tribuna" type="xs:string"/>
+          <xs:element name="categoria" type="xs:string"/>
+          <xs:element name="precioUsd" type="xs:decimal"/>
+          <xs:element name="stock" type="xs:int"/>
+        </xs:sequence>
+      </xs:complexType>
+
+      <!-- Request / Response para consultarDisponibilidad -->
+      <xs:element name="consultarDisponibilidadRequest">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="codigoEvento" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="consultarDisponibilidadResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element maxOccurs="unbounded" minOccurs="0" name="gradas" type="tns:InventarioGrada"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <!-- Request / Response para reservarEntradas -->
+      <xs:element name="reservarEntradasRequest">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="codigoEvento" type="xs:string"/>
+            <xs:element name="tribuna" type="xs:string"/>
+            <xs:element name="cantidad" type="xs:int"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="reservarEntradasResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="codigoConfirmacion" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <!-- Fault Bean para SinStockException -->
+      <xs:element name="SinStockFault">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="mensaje" type="xs:string"/>
+            <xs:element name="codigoError" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+    </xs:schema>
+  </wsdl:types>
+
+  <wsdl:message name="reservarEntradasRequest">
+    <wsdl:part element="tns:reservarEntradasRequest" name="reservarEntradasRequest"/>
+  </wsdl:message>
+
+  <wsdl:message name="SinStockFault">
+    <wsdl:part element="tns:SinStockFault" name="SinStockFault"/>
+  </wsdl:message>
+
+  <wsdl:message name="reservarEntradasResponse">
+    <wsdl:part element="tns:reservarEntradasResponse" name="reservarEntradasResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="consultarDisponibilidadResponse">
+    <wsdl:part element="tns:consultarDisponibilidadResponse" name="consultarDisponibilidadResponse"/>
+  </wsdl:message>
+
+  <wsdl:message name="consultarDisponibilidadRequest">
+    <wsdl:part element="tns:consultarDisponibilidadRequest" name="consultarDisponibilidadRequest"/>
+  </wsdl:message>
+
+  <wsdl:portType name="F1TicketingSoapPort">
+    <wsdl:operation name="reservarEntradas">
+      <wsdl:input message="tns:reservarEntradasRequest" name="reservarEntradasRequest"/>
+      <wsdl:output message="tns:reservarEntradasResponse" name="reservarEntradasResponse"/>
+      <wsdl:fault message="tns:SinStockFault" name="SinStockFault"/>
+    </wsdl:operation>
+    <wsdl:operation name="consultarDisponibilidad">
+      <wsdl:input message="tns:consultarDisponibilidadRequest" name="consultarDisponibilidadRequest"/>
+      <wsdl:output message="tns:consultarDisponibilidadResponse" name="consultarDisponibilidadResponse"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="F1TicketingSoapPortSoap11" type="tns:F1TicketingSoapPort">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="reservarEntradas">
+      <soap:operation soapAction=""/>
+      <wsdl:input name="reservarEntradasRequest">
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output name="reservarEntradasResponse">
+        <soap:body use="literal"/>
+      </wsdl:output>
+      <wsdl:fault name="SinStockFault">
+        <soap:fault name="SinStockFault" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+    <wsdl:operation name="consultarDisponibilidad">
+      <soap:operation soapAction=""/>
+      <wsdl:input name="consultarDisponibilidadRequest">
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output name="consultarDisponibilidadResponse">
+        <soap:body use="literal"/>
+      </wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="F1TicketingSoapPortService">
+    <wsdl:port binding="tns:F1TicketingSoapPortSoap11" name="F1TicketingSoapPortSoap11">
+      <soap:address location="http://localhost:8080/ws/ticketing"/>
+    </wsdl:port>
+  </wsdl:service>
+
+</wsdl:definitions>
