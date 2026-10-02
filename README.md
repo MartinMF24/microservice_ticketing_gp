@@ -266,24 +266,30 @@ Haz clic en **Deploy Web Service**.
 
 ---
 
-### 7.3. Configurar el Disparador Diario del CRON
+### 7.3. Configurar el Disparador Diario 100% Gratuito (Despierta Render)
 
-Para garantizar que el servicio se despierte y sincronice una vez al día sin depender de que el contenedor esté activo:
+En Render, la característica de "Cron Job" nativa es de pago ($1/mes). Para mantener todo **100% gratuito**, se proveen dos alternativas estándar:
 
-#### Opción A: Render Cron Job (Dentro de Render)
-1. En el Dashboard de Render, haz clic en **New +** > **Cron Job**.
-2. Conecta el mismo repositorio o usa una imagen base con curl.
-3. Configura:
-   - **Schedule**: `0 3 * * *` (todos los días a las 03:00 UTC).
-   - **Command**:
-     ```bash
-     curl -s -X POST https://microservice-ticketing-gp.onrender.com/api/microservicios/sync-tickets/all
-     ```
+#### Opción 1 (Recomendada): GitHub Actions (Ya configurado en el proyecto)
+El repositorio ya incluye el workflow en [`.github/workflows/daily-sync.yml`](file:///.github/workflows/daily-sync.yml):
+1. No requiere cuentas externas; corre directamente en tu repositorio de GitHub.
+2. Está programado para ejecutarse todos los días a las `06:00 UTC` (03:00 AM hora Argentina):
+   - Envía un `POST` al endpoint `/api/microservicios/sync-tickets/all`.
+   - Incorpora reintentos automáticos (`--retry 3`) para esperar mientras Render despierta del modo reposo (cold start).
+3. **Configurar la URL en GitHub**:
+   - En tu repositorio de GitHub, ve a **Settings** > **Secrets and variables** > **Actions** > pestaña **Variables**.
+   - Añade una variable:
+     - Name: `TICKETING_SERVICE_URL`
+     - Value: `https://tu-app.onrender.com` (sin la barra final).
+4. **Ejecución manual a demanda**:
+   - Puedes ir a la pestaña **Actions** en GitHub, seleccionar **"Sincronización Diaria de Entradas F1 (CRON)"** y presionar **Run workflow**.
 
-#### Opción B: Disparador Gratuito con cron-job.org
-1. Entra a [cron-job.org](https://cron-job.org).
-2. Crea un nuevo cronjob con:
-   - **URL**: `https://microservice-ticketing-gp.onrender.com/api/microservicios/sync-tickets/all`
+#### Opción 2: cron-job.org (Gratuito sin código)
+1. Regístrate en [cron-job.org](https://cron-job.org) (servicio 100% gratuito sin tarjeta de crédito).
+2. Haz clic en **Create Cronjob**:
+   - **Title**: `Sync F1 Tickets Render`
+   - **URL**: `https://tu-app.onrender.com/api/microservicios/sync-tickets/all`
    - **Request Method**: `POST`
-   - **Schedule**: Una vez al día a la hora deseada.
+   - **Schedule**: User-defined (ej: todos los días a las 03:00 AM).
+3. Presiona **Create**. Hará el ping diario despertando el servicio en Render y ejecutando el ETL.
 

@@ -1,0 +1,44 @@
+name: Sincronización Diaria de Entradas F1 (CRON)
+
+on:
+  schedule:
+    # Se ejecuta todos los días a las 06:00 UTC (03:00 AM hora Argentina UTC-3)
+    - cron: '0 6 * * *'
+  # Permite ejecutarlo manualmente en cualquier momento desde la pestaña "Actions" en GitHub
+  workflow_dispatch:
+
+jobs:
+  sync-tickets:
+    name: Ejecutar ETL /all en Render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar sincronización masiva de inventario
+        run: |
+          # Toma la URL configurada en las variables de GitHub o el valor por defecto
+          BASE_URL="${{ vars.TICKETING_SERVICE_URL || 'https://microservice-ticketing-gp.onrender.com' }}"
+          ENDPOINT="$BASE_URL/api/microservicios/sync-tickets/all"
+          
+          echo "⏰ Iniciando llamada a: $ENDPOINT"
+          
+          # Realiza la petición POST con timeout extendido y reintentos automáticos
+          # para soportar el cold start de Render cuando el contenedor está en reposo (sleep mode).
+          RESPONSE=$(curl -s -S -X POST "$ENDPOINT" \
+            -H "Content-Type: application/json" \
+            --connect-timeout 60 \
+            --max-time 180 \
+            --retry 3 \
+            --retry-delay 15 \
+            --retry-all-errors \
+            --write-out "\nHTTP_STATUS:%{http_code}")
+          
+          echo "Respuesta del microservicio:"
+          echo "$RESPONSE"
+          
+          STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d':' -f2)
+          
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
+            echo "✅ Sincronización completada exitosamente con código HTTP $STATUS"
+          else
+            echo "❌ Falló la sincronización con código HTTP $STATUS"
+            exit 1
+          fi
