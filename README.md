@@ -1,159 +1,262 @@
 # Microservicio ETL de Entradas F1 Ticketing (`microservice_ticketing_gp`)
 
-Microservicio Spring Boot de ingesta y sincronización (ETL) para el catálogo de entradas de tribunas y stock de Grandes Premios de Fórmula 1. Extrae los datos desde un servicio legado SOAP (`f1-ticketing-legacy-soap`), transforma y normaliza las categorías cumpliendo las restricciones CHECK de PostgreSQL, y persiste el inventario en Supabase mediante una estrategia Upsert atómica.
+Microservicio Spring Boot de ingesta y sincronización (ETL) para el catálogo de entradas de tribunas y stock de Grandes Premios de Fórmula 1. Su objetivo es actuar como puente automatizado entre un sistema legado SOAP (`f1-ticketing-legacy-soap`) y la base de datos relacional PostgreSQL (Supabase), asegurando inventario actualizado, normalizado e idempotente sin implementar lógica de compras o reservas.
 
 ---
 
-## 1. Arquitectura y Estructura del Proyecto
+## 1. La Idea y Propósito del Proyecto
 
-El microservicio implementa la arquitectura **Package by Feature** replicando el diseño arquitectónico de `microservice_booking_Hotel_gp` y `microservice_flights_gp`:
+En el ecosistema de la plataforma de Grandes Premios, la venta y visualización de entradas en tiempo real requiere datos consolidados en PostgreSQL. Sin embargo, los sistemas proveedores de circuitos o federaciones operan con servicios SOAP legados (JAX-WS / XML).
+
+Este microservicio resuelve este problema mediante un **Pipeline ETL (Extract, Transform, Load)** desacoplado:
+1. **Consulta los servicios SOAP** de ticketing para cada Gran Premio.
+2. **Transforma y normaliza** los datos heterogéneos del XML a las restricciones estrictas de la base de datos relacional.
+3. **Resuelve relaciones foráneas** vinculando cada tribuna con su evento correspondiente en Supabase (`eventos_f1`).
+4. **Aplica persistencia Upsert atómica**, garantizando que el stock y los precios se actualicen sin duplicar registros ni romper integridad referencial.
+5. **Mantiene el inventario al día** mediante ejecuciones automáticas diarias o disparos a demanda vía REST.
+
+```
+┌──────────────────────────────┐
+│  Sistema Legado SOAP F1      │
+│  (f1-ticketing-legacy-soap)  │
+└──────────────┬───────────────┘
+               │  1. consultarDisponibilidad(codigoEvento) [SOAP / XML]
+               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  microservice_ticketing_gp (Spring Boot 3 / Java 21)             │
+│                                                                  │
+│  [EXTRACT]   TicketingClientService (JAX-WS / CXF Stubs)         │
+│                     │                                            │
+│  [TRANSFORM] TicketingAdapter (Mapeo categorías & CHECK rule)    │
+│                     │                                            │
+│  [RESOLVE]   EventoF1Repository (Búsqueda por año/ciudad/nombre) │
+│                     │                                            │
+│  [LOAD]      TicketingSyncService (Estrategia Upsert idempotente)│
+└──────────────┬───────────────────────────────────────────────────┘
+               │  2. Inserción / Actualización atómica [JDBC / JPA]
+               ▼
+┌──────────────────────────────┐
+│  Base de Datos PostgreSQL    │
+│  (Supabase: entradas_gradas) │
+└──────────────────────────────┘
+```
+
+---
+
+## 2. ¿Cómo Funciona el Proceso ETL?
+
+El flujo de procesamiento se divide en tres etapas claramente definidas:
+
+### 2.1. Extract (Extracción) — `TicketingClientService`
+* A partir de un código de evento (ej. `F1-2026-MAD`), el cliente SOAP JAX-WS compila y envía una petición `consultarDisponibilidad`.
+* Recibe un sobre SOAP con una lista de tribunas (`InventarioGrada`) que incluye: nombre de la tribuna, precio base, stock y categoría legacy (`VIP`, `Premium`, `Standard`, `General`).
+* Dispone de mecanismos de contingencia y fallback configurable en caso de indisponibilidad temporal del servicio SOAP.
+
+### 2.2. Transform (Transformación) — `TicketingAdapter`
+* Convierte las clases generadas por JAX-WS a entidades de dominio JPA `EntradaGrada`.
+* **Regla de Negocio Crítica (Restricción CHECK de Base de Datos)**:
+  La tabla `entradas_gradas` posee la restricción `entradas_gradas_tipo_check` que **únicamente** acepta los valores:
+  `'VIP'`, `'Asiento Numerado'` y `'General'`.
+  
+  El Adapter normaliza las categorías legadas según la siguiente matriz de equivalencia:
+  
+  | Categoría SOAP Legada | Tipo en Base de Datos (`tipo`) |
+  |---|---|
+  | `VIP` | `VIP` |
+  | `Premium` | `Asiento Numerado` |
+  | `Standard` | `Asiento Numerado` |
+  | `General` | `General` |
+  | *(Cualquier otra)* | `General` *(valor por defecto seguro)* |
+
+* **Saneamiento de Datos**: Truncado y limpieza de espacios en `nombre_tribuna` (máximo 100 caracteres), redondeo a dos decimales con `BigDecimal` y conversión de stock negativo a `0`.
+
+### 2.3. Resolve (Resolución de Llaves Foráneas)
+* Las entradas no pueden existir sin estar vinculadas a un evento en `public.eventos_f1`.
+* El servicio analiza el código del evento (ej. año `2026` y plaza `MAD` / `Madrid`) y consulta `EventoF1Repository` para recuperar el `id_evento` (UUID) correspondiente en Supabase, aplicando tolerancia a nombres fonéticos o sin tildes (ej. *Bakú* vs *Baku*).
+
+### 2.4. Load (Carga / Upsert Idempotente) — `TicketingSyncService`
+* Para cada tribuna transformada, verifica si ya existe un registro con el par `(id_evento, nombre_tribuna)`:
+  * **Si ya existe**: Actualiza `precio_usd`, `stock_disponible` y `tipo`.
+  * **Si no existe**: Crea una nueva entidad con UUID generado automáticamente y asigna la relación foránea.
+* El proceso es **100% idempotente**: puede ejecutarse múltiples veces consecutivas sin generar registros duplicados ni violaciones de claves primarias.
+
+---
+
+## 3. Patrones de Diseño y Decisiones de Arquitectura
+
+El microservicio aplica patrones de diseño consolidados de la ingeniería de software empresarial:
+
+### 3.1. Patrón Adapter (Adaptador)
+* **Clase**: `TicketingAdapter`
+* **Propósito**: Desacoplar el modelo de datos generado por el WSDL legado del modelo de dominio JPA del sistema. Si el servicio SOAP modifica el esquema de sus DTOs o agrega atributos, los cambios se aíslan exclusivamente dentro del adaptador, sin impactar la lógica de negocio ni la base de datos.
+* **Garantía**: Asegura que ninguna entidad JPA se persista con valores que violen las restricciones CHECK de PostgreSQL.
+
+### 3.2. Arquitectura "Package by Feature"
+* El código está organizado por responsabilidades funcionales (`adapter`, `config`, `controller`, `dto`, `model`, `repository`, `service`, `shared`), manteniendo coherencia con los demás microservicios del ecosistema (`microservice_booking_Hotel_gp` y `microservice_flights_gp`).
+
+### 3.3. Pipeline ETL (Extract - Transform - Load)
+* Desacoplamiento estricto de las 3 fases del procesamiento de datos:
+  * `TicketingClientService` se ocupa exclusivamente de la comunicación I/O con el protocolo SOAP.
+  * `TicketingAdapter` se ocupa exclusivamente de la transformación y mapeo en memoria.
+  * `TicketingSyncService` se ocupa de la orquestación, resolución de entidades y persistencia transaccional.
+
+### 3.4. Patrón Repository (Spring Data JPA)
+* Abstracción del acceso a datos mediante interfaces `EntradaGradaRepository` y `EventoF1Repository`.
+* Implementa consultas derivadas optimizadas (`findByIdEventoAndNombreTribunaIgnoreCase`) para verificar existencia de registros antes de persistir.
+
+### 3.5. Patrón Idempotencia / Upsert (Update or Insert)
+* Asegura que el estado final de la base de datos sea idéntico independientemente de cuántas veces se invoque el proceso de sincronización. Las entradas ya existentes reflejan el stock más reciente y las nuevas se incorporan sin colisiones.
+
+### 3.6. Resiliencia y Fallback de Compilación
+* **CXF Codegen Plugin**: Genera los stubs JAX-WS automáticamente a partir de `TICKETING_WSDL_URL`.
+* Si el servicio SOAP externo no está disponible al momento de compilar el proyecto Maven, el build utiliza automáticamente el contrato empaquetado localmente en `src/main/resources/wsdl/ticketing.wsdl`, asegurando compilaciones e integraciones continuas reproducibles.
+
+### 3.7. Manejo Centralizado de Excepciones
+* Mediante `@RestControllerAdvice` en `GlobalExceptionHandler` y el envoltorio estándar `ApiResponse<T>`, garantizando que todas las respuestas de la API (éxito o error) posean una estructura JSON uniforme.
+
+---
+
+## 4. Estructura del Código
 
 ```text
-microservice_ticketing_gp/
-├── pom.xml                                    # CXF codegen plugin, JAX-WS runtime y Spring Boot
-├── .env.example                               # Plantilla de variables de entorno
-├── .env                                       # Configuración local de variables
-├── src/
-│   ├── main/
-│   │   ├── java/com/uade/microservices/ticketing/
-│   │   │   ├── TicketingMicroserviceApplication.java
-│   │   │   ├── adapter/
-│   │   │   │   └── TicketingAdapter.java      # Patrón Adapter (JAX-WS -> EntradaGrada)
-│   │   │   ├── config/
-│   │   │   │   ├── CorsConfig.java            # Configuración CORS global
-│   │   │   │   ├── TicketingSoapProperties.java # Mapeo de variables de entorno SOAP
-│   │   │   │   └── TicketingSoapClientConfig.java # Bean F1TicketingSoapPort
-│   │   │   ├── controller/
-│   │   │   │   └── TicketingSyncController.java # Endpoints POST /all y POST /{codigoEvento}
-│   │   │   ├── dto/response/
-│   │   │   │   ├── EntradaSyncSummaryDto.java
-│   │   │   │   ├── TicketingSyncResultDto.java
-│   │   │   │   └── TicketingSyncAllSummaryDto.java
-│   │   │   ├── model/
-│   │   │   │   ├── EntradaGrada.java          # Entidad JPA public.entradas_gradas
-│   │   │   │   ├── EventoF1.java              # Entidad JPA public.eventos_f1
-│   │   │   │   ├── Circuito.java              # Entidad JPA public.circuitos
-│   │   │   │   ├── Ciudad.java                # Entidad JPA public.ciudades
-│   │   │   │   └── GranPremioTarget.java      # Catálogo maestro de 19 Grandes Premios
-│   │   │   ├── repository/
-│   │   │   │   ├── EntradaGradaRepository.java
-│   │   │   │   ├── EventoF1Repository.java
-│   │   │   │   ├── CircuitoRepository.java
-│   │   │   │   └── CiudadRepository.java
-│   │   │   ├── service/
-│   │   │   │   ├── TicketingClientService.java # Fase EXTRACT (JAX-WS)
-│   │   │   │   └── TicketingSyncService.java   # Orquestador ETL y Upsert
-│   │   │   └── shared/
-│   │   │       ├── exception/
-│   │   │       │   └── GlobalExceptionHandler.java
-│   │   │       └── response/
-│   │   │           └── ApiResponse.java
-│   │   └── resources/
-│   │       ├── application.properties
-│   │       ├── application-dev.properties
-│   │       ├── db/
-│   │       │   └── indexes.sql
-│   │       └── wsdl/
-│   │           └── ticketing.wsdl
-│   └── test/
-│       └── java/com/uade/microservices/ticketing/
-│           ├── adapter/
-│           │   └── TicketingAdapterTest.java
-│           ├── controller/
-│           │   └── TicketingSyncControllerTest.java
-│           └── service/
-│               └── TicketingSyncServiceTest.java
+com.uade.microservices.ticketing/
+├── adapter/
+│   └── TicketingAdapter.java            # Patrón Adapter: WSDL DTO -> EntradaGrada (regla CHECK)
+├── config/
+│   ├── CorsConfig.java                  # Orígenes cruzados y cabeceras
+│   ├── TicketingSoapClientConfig.java   # Configuración del bean JAX-WS Port
+│   └── TicketingSoapProperties.java     # Propiedades de conexión SOAP (URL, timeouts)
+├── controller/
+│   └── TicketingSyncController.java     # Endpoints REST de sincronización
+├── dto/
+│   └── response/
+│       ├── EntradaSyncSummaryDto.java   # Detalle de cada entrada procesada
+│       ├── TicketingSyncAllSummaryDto.java # Resumen general del catálogo
+│       └── TicketingSyncResultDto.java  # Detalle del evento y sus entradas
+├── model/
+│   ├── Circuito.java                    # Entidad JPA public.circuitos
+│   ├── Ciudad.java                      # Entidad JPA public.ciudades
+│   ├── EntradaGrada.java                # Entidad JPA principal: public.entradas_gradas
+│   ├── EventoF1.java                    # Entidad JPA public.eventos_f1
+│   └── GranPremioTarget.java            # Catálogo maestro en memoria de los 19 Grandes Premios
+├── repository/
+│   ├── CircuitoRepository.java
+│   ├── CiudadRepository.java
+│   ├── EntradaGradaRepository.java      # Operaciones sobre entradas_gradas (Upsert)
+│   └── EventoF1Repository.java          # Búsqueda de eventos por año y circuito/ciudad
+├── scheduler/
+│   └── TicketingSyncScheduler.java      # Ejecución programada con @Scheduled
+├── service/
+│   ├── TicketingClientService.java      # EXTRACT: Cliente SOAP JAX-WS
+│   └── TicketingSyncService.java        # LOAD / ORQUESTADOR: Sincronización completa
+└── shared/
+    ├── exception/
+    │   └── GlobalExceptionHandler.java  # Control centralizado de errores HTTP
+    └── response/
+        └── ApiResponse.java             # Envoltorio estándar de respuesta JSON
 ```
 
 ---
 
-## 2. Generación del Cliente SOAP (JAX-WS)
+## 5. Catálogo de Endpoints y Guía de Invocación
 
-El proyecto utiliza `cxf-codegen-plugin` (`wsdl2java`) para compilar el contrato WSDL expuesto por `f1-ticketing-legacy-soap` y generar automáticamente los stubs Java en `target/generated-sources/cxf`:
+Los endpoints pueden consumirse tanto en un entorno local como sobre la instancia desplegada en Render.
 
-- **Variable de Entorno**: `TICKETING_WSDL_URL` (por defecto: `http://localhost:8080/ws/ticketing.wsdl`).
-- **Resiliencia de Compilación Offline**: Si la variable de entorno no está establecida o el servicio SOAP no está ejecutándose durante la fase de compilación Maven, el build utiliza como fallback el contrato empaquetado en `src/main/resources/wsdl/ticketing.wsdl`.
+| Entorno | URL Base (`BASE_URL`) |
+|---|---|
+| **Local** | `http://localhost:8083` |
+| **Render** | `https://<tu-servicio>.onrender.com` |
 
-Para generar las fuentes manualmente:
+---
+
+### 5.1. Sincronización Masiva del Catálogo Completo
+
+Ejecuta el pipeline ETL para los **19 Grandes Premios** del calendario oficial de Fórmula 1.
+
+* **Método**: `POST`
+* **Ruta**: `/api/microservicios/sync-tickets/all`
+
+#### Invocación Local:
 ```bash
-./mvnw generate-sources
+curl -X POST http://localhost:8083/api/microservicios/sync-tickets/all \
+  -H "Content-Type: application/json"
 ```
 
----
-
-## 3. Esquema de Base de Datos y Entidad JPA
-
-La entidad `EntradaGrada` mapea estrictamente la tabla `public.entradas_gradas` de PostgreSQL / Supabase:
-
-```sql
-create table public.entradas_gradas (
-  id_entrada uuid not null default extensions.uuid_generate_v4 (),
-  id_evento uuid not null,
-  nombre_tribuna character varying(100) not null,
-  precio_usd numeric(10, 2) not null,
-  stock_disponible integer not null default 0,
-  tipo character varying(50) null,
-  created_at timestamp with time zone null default timezone ('utc'::text, now()),
-  constraint entradas_gradas_pkey primary key (id_entrada),
-  constraint entradas_gradas_id_evento_fkey foreign KEY (id_evento) references eventos_f1 (id_evento) on delete CASCADE,
-  constraint entradas_gradas_tipo_check check (
-    (
-      (tipo)::text = any (
-        (
-          array[
-            'VIP'::character varying,
-            'Asiento Numerado'::character varying,
-            'General'::character varying
-          ]
-        )::text[]
-      )
-    )
-  )
-);
-```
-
----
-
-## 4. Pipeline ETL y Reglas de Negocio
-
-### 4.1. Extract (`TicketingClientService`)
-- Invoca la operación SOAP `consultarDisponibilidad(ConsultarDisponibilidadRequest)` pasando el código de carrera legado (ej. `"F1-2026-MAD"`).
-- Devuelve `List<InventarioGrada>`.
-- Posee fallback de contingencia configurable vía `TICKETING_SOAP_FALLBACK_ENABLED`.
-
-### 4.2. Transform (`TicketingAdapter`)
-Mapea la respuesta generada por JAX-WS a la entidad `EntradaGrada`.
-
-> **Regla de Negocio Crítica (Restricción CHECK `entradas_gradas_tipo_check`)**:
-> El sistema SOAP legado devuelve categorías como `"VIP"`, `"Premium"`, `"Standard"` y `"General"`.
-> La base de datos solo admite `'VIP'`, `'Asiento Numerado'` y `'General'`.
-> El Adapter transforma `"Premium"` y `"Standard"` hacia `"Asiento Numerado"`.
-
-### 4.3. Resolución de Claves Foráneas (`EventoF1Repository`)
-- Resuelve dinámicamente el `id_evento` (UUID) en Supabase a partir de la temporada (año) y el nombre de circuito o ciudad derivados del `codigoEvento` legado.
-- Soporta normalización fonética y sin acentos (`"Bakú"` == `"Baku"`, `"São Paulo"` == `"Sao Paulo"`).
-
-### 4.4. Load (`TicketingSyncService` y Repositorios - Upsert)
-- Busca si ya existe una entrada con el mismo `id_evento` y `nombre_tribuna` (insensible a mayúsculas y minúsculas).
-- **Si ya existe**: Actualiza `precio_usd`, `stock_disponible` y `tipo`.
-- **Si no existe**: Inserta el nuevo registro con UUID generado.
-
----
-
-## 5. Endpoints REST
-
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `POST` | `/api/microservicios/sync-tickets/all` | Sincronización masiva de todos los Grandes Premios |
-| `POST` | `/api/microservicios/sync-tickets/{codigoEvento}` | Sincronización a demanda de una carrera (ej. `F1-2026-MAD`) |
-| `GET` | `/api/microservicios/sync-tickets/catalog` | Catálogo maestro de Grandes Premios disponibles |
-
-### Ejemplo de Petición Individual:
+#### Invocación en Render:
 ```bash
-curl -X POST http://localhost:8083/api/microservicios/sync-tickets/F1-2026-MAD
+curl -X POST https://<tu-servicio>.onrender.com/api/microservicios/sync-tickets/all \
+  -H "Content-Type: application/json"
 ```
 
-**Respuesta Exitosa (200 OK):**
+#### Respuesta de Ejemplo (`200 OK`):
+```json
+{
+  "success": true,
+  "message": "Sincronización masiva de inventario completada. Éxito: 19, Fallos: 0",
+  "data": {
+    "totalCarrerasProcesadas": 19,
+    "carrerasExitosas": 19,
+    "carrerasFallidas": 0,
+    "totalEntradasProcesadas": 76,
+    "totalEntradasCreadas": 0,
+    "totalEntradasActualizadas": 76,
+    "resultados": [
+      {
+        "codigoEvento": "F1-2026-MAD",
+        "idEvento": "992ae124-3d59-4adb-9fd2-f0e825c605e8",
+        "carrera": "Madrid",
+        "temporada": 2026,
+        "fechaCarrera": "2026-09-11",
+        "totalEntradasExtraidas": 4,
+        "entradasCreadas": 0,
+        "entradasActualizadas": 4,
+        "estado": "SUCCESS",
+        "entradas": [
+          {
+            "idEntrada": "55555555-0000-4000-8000-000000000003",
+            "idEvento": "992ae124-3d59-4adb-9fd2-f0e825c605e8",
+            "nombreTribuna": "Paddock Club Madrid",
+            "precioUsd": 3500.00,
+            "stockDisponible": 500,
+            "tipo": "VIP"
+          },
+          {
+            "idEntrada": "55555555-0000-4000-8000-000000000002",
+            "idEvento": "992ae124-3d59-4adb-9fd2-f0e825c605e8",
+            "nombreTribuna": "Tribuna Principal",
+            "precioUsd": 1200.00,
+            "stockDisponible": 2500,
+            "tipo": "Asiento Numerado"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 5.2. Sincronización a Demanda de un Gran Premio Específico
+
+Permite forzar la actualización de entradas para una única carrera pasando su código legado en la URL (ej. `F1-2026-MAD`, `F1-2026-MON`, `F1-2026-SIL`, etc.).
+
+* **Método**: `POST`
+* **Ruta**: `/api/microservicios/sync-tickets/{codigoEvento}`
+
+#### Invocación Local:
+```bash
+curl -X POST http://localhost:8083/api/microservicios/sync-tickets/F1-2026-MAD \
+  -H "Content-Type: application/json"
+```
+
+#### Invocación en Render:
+```bash
+curl -X POST https://<tu-servicio>.onrender.com/api/microservicios/sync-tickets/F1-2026-MAD \
+  -H "Content-Type: application/json"
+```
+
+#### Respuesta de Ejemplo (`200 OK`):
 ```json
 {
   "success": true,
@@ -184,6 +287,22 @@ curl -X POST http://localhost:8083/api/microservicios/sync-tickets/F1-2026-MAD
         "precioUsd": 1200.00,
         "stockDisponible": 2500,
         "tipo": "Asiento Numerado"
+      },
+      {
+        "idEntrada": "55555555-0000-4000-8000-000000000001",
+        "idEvento": "992ae124-3d59-4adb-9fd2-f0e825c605e8",
+        "nombreTribuna": "Grada Curva 4",
+        "precioUsd": 650.00,
+        "stockDisponible": 5000,
+        "tipo": "Asiento Numerado"
+      },
+      {
+        "idEntrada": "55555555-0000-4000-8000-000000000000",
+        "idEvento": "992ae124-3d59-4adb-9fd2-f0e825c605e8",
+        "nombreTribuna": "Pelouse General",
+        "precioUsd": 280.00,
+        "stockDisponible": 12000,
+        "tipo": "General"
       }
     ]
   }
@@ -192,104 +311,113 @@ curl -X POST http://localhost:8083/api/microservicios/sync-tickets/F1-2026-MAD
 
 ---
 
-## 6. Ejecución y Pruebas
+### 5.3. Catálogo Maestro de Grandes Premios
 
-### Compilación y Pruebas Unitarias:
+Devuelve el listado de las 19 carreras objetivo configuradas en el sistema, con sus respectivos códigos de evento, ciudades y nombres de circuito.
+
+* **Método**: `GET`
+* **Ruta**: `/api/microservicios/sync-tickets/catalog`
+
+#### Invocación Local:
+```bash
+curl -X GET http://localhost:8083/api/microservicios/sync-tickets/catalog
+```
+
+#### Invocación en Render:
+```bash
+curl -X GET https://<tu-servicio>.onrender.com/api/microservicios/sync-tickets/catalog
+```
+
+#### Respuesta de Ejemplo (`200 OK`):
+```json
+{
+  "success": true,
+  "message": "Catálogo de 19 Grandes Premios recuperado exitosamente",
+  "data": [
+    {
+      "codigoEvento": "F1-2026-MAD",
+      "carrera": "Madrid",
+      "temporada": 2026,
+      "nombreCircuito": "Circuito de Madring IFEMA",
+      "ciudad": "Madrid"
+    },
+    {
+      "codigoEvento": "F1-2026-MON",
+      "carrera": "Monaco",
+      "temporada": 2026,
+      "nombreCircuito": "Circuit de Monaco",
+      "ciudad": "Monaco"
+    },
+    {
+      "codigoEvento": "F1-2026-SIL",
+      "carrera": "Silverstone",
+      "temporada": 2026,
+      "nombreCircuito": "Silverstone Circuit",
+      "ciudad": "Silverstone"
+    }
+  ]
+}
+```
+
+---
+
+## 6. Esquema de Base de Datos
+
+El microservicio persiste sobre la tabla `public.entradas_gradas` en Supabase:
+
+```sql
+create table public.entradas_gradas (
+  id_entrada uuid not null default extensions.uuid_generate_v4 (),
+  id_evento uuid not null,
+  nombre_tribuna character varying(100) not null,
+  precio_usd numeric(10, 2) not null,
+  stock_disponible integer not null default 0,
+  tipo character varying(50) null,
+  created_at timestamp with time zone null default timezone ('utc'::text, now()),
+  constraint entradas_gradas_pkey primary key (id_entrada),
+  constraint entradas_gradas_id_evento_fkey foreign KEY (id_evento) references eventos_f1 (id_evento) on delete CASCADE,
+  constraint entradas_gradas_tipo_check check (
+    (
+      (tipo)::text = any (
+        (
+          array[
+            'VIP'::character varying,
+            'Asiento Numerado'::character varying,
+            'General'::character varying
+          ]
+        )::text[]
+      )
+    )
+  )
+);
+```
+
+---
+
+## 7. Ejecución Local y Testing
+
+### 7.1. Requisitos Previos
+* Java 21 LTS
+* Maven 3.9+ (o utilizar el wrapper `./mvnw`)
+
+### 7.2. Configuración de Variables (`.env`)
+Crear un archivo `.env` en la raíz del proyecto (o configurar variables de entorno en el sistema) tomando como base `.env.example`:
+
+```properties
+SPRING_DATASOURCE_URL=jdbc:postgresql://<SUPABASE_HOST>:6543/postgres?sslmode=require&prepareThreshold=0
+SPRING_DATASOURCE_USERNAME=postgres.<PROJECT_REF>
+SPRING_DATASOURCE_PASSWORD=<TU_PASSWORD>
+TICKETING_WSDL_URL=http://localhost:8080/ws/ticketing.wsdl
+TICKETING_SOAP_ENDPOINT_URL=http://localhost:8080/ws/ticketing
+```
+
+### 7.3. Compilar y Ejecutar Pruebas
 ```bash
 ./mvnw clean test
 ```
 
-### Ejecución Local:
+### 7.4. Iniciar la Aplicación en Modo Local
 ```bash
 ./mvnw spring-boot:run
 ```
-El servicio iniciará en el puerto `8083`.
-
----
-
-## 7. Despliegue en la Nube (Render.com) y Configuración del CRON Diario
-
-### 7.1. Particularidad de Render Free Tier y Estrategia de CRON
-En el plan gratuito de Render, los Web Services entran en **estado de reposo (sleep)** tras 15 minutos sin peticiones entrantes.
-Para asegurar la ejecución diaria de la sincronización de stock de entradas existen dos enfoques complementarios:
-
-1. **CRON Interno en Spring Boot (`@Scheduled`)**:
-   - Activo por defecto con la propiedad: `ticketing.sync.cron.enabled=true`.
-   - Expresión por defecto: `0 0 3 * * ?` (3:00 AM UTC todos los días).
-   - Funciona automáticamente cuando el servicio está activo o en planes con disponibilidad continua.
-
-2. **Trigger Externo / Render Cron Job (Recomendado para despertar la app en Render Free)**:
-   - Realiza una llamada HTTP `POST` a `/api/microservicios/sync-tickets/all`.
-   - Al recibir la petición, Render despierta el contenedor y ejecuta el proceso ETL completo de los 19 Grandes Premios.
-
----
-
-### 7.2. Paso a Paso para Desplegar en Render
-
-#### Paso 1: Subir el proyecto a un repositorio en GitHub
-Si aún no has inicializado el repositorio en GitHub:
-```powershell
-git init
-git add .
-git commit -m "feat: microservicio ETL ticketing con Dockerfile y CRON diario"
-git branch -M main
-git remote add origin https://github.com/TU_USUARIO/microservice_ticketing_gp.git
-git push -u origin main
-```
-
-#### Paso 2: Crear el Web Service en Render
-1. Inicia sesión en [render.com](https://render.com).
-2. Haz clic en **New +** y selecciona **Web Service**.
-3. Conecta tu repositorio `microservice_ticketing_gp`.
-4. Configura los parámetros:
-   - **Name**: `microservice-ticketing-gp`
-   - **Region**: Selecciona la más cercana (ej. `Oregon (US West)` o `Ohio (US East)` para proximidad a Supabase).
-   - **Branch**: `main`
-   - **Runtime**: `Docker`
-   - **Instance Type**: `Free`
-
-#### Paso 3: Configurar Variables de Entorno en Render
-En la pestaña **Environment** de tu Web Service en Render, añade las siguientes variables:
-
-| Variable | Valor |
-|---|---|
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://aws-0-us-west-2.pooler.supabase.com:6543/postgres?sslmode=require&prepareThreshold=0` |
-| `SPRING_DATASOURCE_USERNAME` | `postgres.zprznayvpeijjoiknird` |
-| `SPRING_DATASOURCE_PASSWORD` | `uade123uade` |
-| `TICKETING_WSDL_URL` | `https://tu-soap-app.onrender.com/ws/ticketing.wsdl` (o dejar default si pruebas con el contrato empaquetado) |
-| `TICKETING_SOAP_ENDPOINT_URL` | `https://tu-soap-app.onrender.com/ws/ticketing` |
-| `TICKETING_CRON_ENABLED` | `true` |
-| `TICKETING_CRON_EXPRESSION` | `0 0 3 * * ?` |
-| `HIKARI_MAX_POOL_SIZE` | `3` |
-
-Haz clic en **Deploy Web Service**.
-
----
-
-### 7.3. Configurar el Disparador Diario 100% Gratuito (Despierta Render)
-
-En Render, la característica de "Cron Job" nativa es de pago ($1/mes). Para mantener todo **100% gratuito**, se proveen dos alternativas estándar:
-
-#### Opción 1 (Recomendada): GitHub Actions (Ya configurado en el proyecto)
-El repositorio ya incluye el workflow en [`.github/workflows/daily-sync.yml`](file:///.github/workflows/daily-sync.yml):
-1. No requiere cuentas externas; corre directamente en tu repositorio de GitHub.
-2. Está programado para ejecutarse todos los días a las `06:00 UTC` (03:00 AM hora Argentina):
-   - Envía un `POST` al endpoint `/api/microservicios/sync-tickets/all`.
-   - Incorpora reintentos automáticos (`--retry 3`) para esperar mientras Render despierta del modo reposo (cold start).
-3. **Configurar la URL en GitHub**:
-   - En tu repositorio de GitHub, ve a **Settings** > **Secrets and variables** > **Actions** > pestaña **Variables**.
-   - Añade una variable:
-     - Name: `TICKETING_SERVICE_URL`
-     - Value: `https://tu-app.onrender.com` (sin la barra final).
-4. **Ejecución manual a demanda**:
-   - Puedes ir a la pestaña **Actions** en GitHub, seleccionar **"Sincronización Diaria de Entradas F1 (CRON)"** y presionar **Run workflow**.
-
-#### Opción 2: cron-job.org (Gratuito sin código)
-1. Regístrate en [cron-job.org](https://cron-job.org) (servicio 100% gratuito sin tarjeta de crédito).
-2. Haz clic en **Create Cronjob**:
-   - **Title**: `Sync F1 Tickets Render`
-   - **URL**: `https://tu-app.onrender.com/api/microservicios/sync-tickets/all`
-   - **Request Method**: `POST`
-   - **Schedule**: User-defined (ej: todos los días a las 03:00 AM).
-3. Presiona **Create**. Hará el ping diario despertando el servicio en Render y ejecutando el ETL.
-
+La aplicación iniciará en el puerto `8083`.
