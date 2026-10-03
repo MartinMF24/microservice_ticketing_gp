@@ -88,33 +88,6 @@ class TicketingReservationControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/microservicios/tickets/{idEntrada}/reservar - Debe responder 200 OK")
-    void reservarEntradas_ConRuta_Exitoso() throws Exception {
-        ReservaEntradaResponseDto dto = new ReservaEntradaResponseDto(
-                "TKT-11223",
-                idEntradaMock,
-                idEventoMock,
-                "F1-2026-MAD",
-                "Madrid",
-                "Paddock Club Madrid",
-                "VIP",
-                1,
-                new BigDecimal("3500.00"),
-                new BigDecimal("3500.00"),
-                "SUCCESS",
-                "Reserva confirmada",
-                OffsetDateTime.now()
-        );
-
-        when(reservationService.reservar(eq(idEntradaMock), eq(1))).thenReturn(dto);
-
-        mockMvc.perform(post("/api/microservicios/tickets/" + idEntradaMock + "/reservar?cantidad=1"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.codigoConfirmacion").value("TKT-11223"));
-    }
-
-    @Test
     @DisplayName("POST /api/microservicios/tickets/reservar - Debe responder 404 si la entrada no existe")
     void reservarEntradas_EntradaNoEncontrada_404() throws Exception {
         when(reservationService.reservar(any(UUID.class), anyInt()))

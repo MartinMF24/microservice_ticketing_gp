@@ -381,11 +381,9 @@ Ejecuta la reserva de entradas y la deducción de inventario **directamente en e
 6. Si el stock es insuficiente, el servicio SOAP retorna un `SinStockFault`, el cual es traducido a una respuesta HTTP `409 Conflict`.
 
 * **Método**: `POST`
-* **Rutas disponibles**:
-  * `POST /api/microservicios/tickets/reservar` (Payload JSON)
-  * `POST /api/microservicios/tickets/{idEntrada}/reservar?cantidad={n}` (Path variable + Query param)
+* **Ruta**: `/api/microservicios/tickets/reservar` (Payload JSON)
 
-#### Invocación Local (Payload JSON):
+#### Invocación Local:
 ```bash
 curl -X POST http://localhost:8083/api/microservicios/tickets/reservar \
   -H "Content-Type: application/json" \
@@ -395,7 +393,7 @@ curl -X POST http://localhost:8083/api/microservicios/tickets/reservar \
   }'
 ```
 
-#### Invocación en Render (Payload JSON):
+#### Invocación en Render:
 ```bash
 curl -X POST https://<tu-servicio>.onrender.com/api/microservicios/tickets/reservar \
   -H "Content-Type: application/json" \
@@ -403,15 +401,6 @@ curl -X POST https://<tu-servicio>.onrender.com/api/microservicios/tickets/reser
     "idEntrada": "55555555-0000-4000-8000-000000000003",
     "cantidad": 2
   }'
-```
-
-#### Invocación por Path Variable (Local / Render):
-```bash
-# Local
-curl -X POST "http://localhost:8083/api/microservicios/tickets/55555555-0000-4000-8000-000000000003/reservar?cantidad=2"
-
-# Render
-curl -X POST "https://<tu-servicio>.onrender.com/api/microservicios/tickets/55555555-0000-4000-8000-000000000003/reservar?cantidad=2"
 ```
 
 #### Respuesta Exitosa (`200 OK`):

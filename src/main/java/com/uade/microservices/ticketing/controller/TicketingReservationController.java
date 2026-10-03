@@ -5,15 +5,12 @@ import com.uade.microservices.ticketing.dto.response.ReservaEntradaResponseDto;
 import com.uade.microservices.ticketing.service.TicketingReservationService;
 import com.uade.microservices.ticketing.shared.response.ApiResponse;
 import jakarta.validation.Valid;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -24,7 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
  * sin modificar la base de datos de Supabase.
  */
 @RestController
-@RequestMapping("/api/microservicios")
+@RequestMapping("/api/microservicios/tickets")
 public class TicketingReservationController {
 
     private static final Logger log = LoggerFactory.getLogger(TicketingReservationController.class);
@@ -36,7 +33,9 @@ public class TicketingReservationController {
     }
 
     /**
-     * Endpoint principal para reservar entradas enviando el payload JSON.
+     * Endpoint único para reservar entradas enviando el payload JSON.
+     *
+     * POST /api/microservicios/tickets/reservar
      *
      * Ejemplo de cuerpo:
      * {
@@ -44,7 +43,7 @@ public class TicketingReservationController {
      *   "cantidad": 2
      * }
      */
-    @PostMapping({"/tickets/reservar", "/sync-tickets/reservar", "/reservar-ticket"})
+    @PostMapping("/reservar")
     public ResponseEntity<ApiResponse<ReservaEntradaResponseDto>> reservarEntradas(
             @Valid @RequestBody ReservaEntradaRequestDto request) {
         log.info("Petición REST de reserva recibida: idEntrada={}, cantidad={}",
@@ -54,25 +53,6 @@ public class TicketingReservationController {
                 request.idEntrada(),
                 request.cantidad()
         );
-
-        return ResponseEntity.ok(ApiResponse.success(
-                String.format("Reserva confirmada en el sistema SOAP con código '%s'", response.codigoConfirmacion()),
-                response
-        ));
-    }
-
-    /**
-     * Endpoint alternativo para reservar entradas mediante path variable y query param.
-     *
-     * Ejemplo: POST /api/microservicios/tickets/{idEntrada}/reservar?cantidad=2
-     */
-    @PostMapping("/tickets/{idEntrada}/reservar")
-    public ResponseEntity<ApiResponse<ReservaEntradaResponseDto>> reservarEntradasPorRuta(
-            @PathVariable("idEntrada") UUID idEntrada,
-            @RequestParam(name = "cantidad", defaultValue = "1") int cantidad) {
-        log.info("Petición REST de reserva recibida por ruta: idEntrada={}, cantidad={}", idEntrada, cantidad);
-
-        ReservaEntradaResponseDto response = ticketingReservationService.reservar(idEntrada, cantidad);
 
         return ResponseEntity.ok(ApiResponse.success(
                 String.format("Reserva confirmada en el sistema SOAP con código '%s'", response.codigoConfirmacion()),
