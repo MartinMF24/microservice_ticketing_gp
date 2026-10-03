@@ -127,33 +127,40 @@ com.uade.microservices.ticketing/
 │   ├── TicketingSoapClientConfig.java   # Configuración del bean JAX-WS Port
 │   └── TicketingSoapProperties.java     # Propiedades de conexión SOAP (URL, timeouts)
 ├── controller/
-│   └── TicketingSyncController.java     # Endpoints REST de sincronización
+│   ├── TicketingReservationController.java # Endpoints de reserva (POST /tickets/reservar)
+│   └── TicketingSyncController.java        # Endpoints ETL (POST /all, POST /{codigoEvento})
 ├── dto/
+│   ├── request/
+│   │   └── ReservaEntradaRequestDto.java   # Solicitud de reserva (idEntrada, cantidad)
 │   └── response/
-│       ├── EntradaSyncSummaryDto.java   # Detalle de cada entrada procesada
+│       ├── EntradaSyncSummaryDto.java      # Detalle de cada entrada procesada en ETL
+│       ├── ReservaEntradaResponseDto.java  # Confirmación de reserva SOAP
 │       ├── TicketingSyncAllSummaryDto.java # Resumen general del catálogo
-│       └── TicketingSyncResultDto.java  # Detalle del evento y sus entradas
+│       └── TicketingSyncResultDto.java     # Detalle del evento y sus entradas
 ├── model/
-│   ├── Circuito.java                    # Entidad JPA public.circuitos
-│   ├── Ciudad.java                      # Entidad JPA public.ciudades
-│   ├── EntradaGrada.java                # Entidad JPA principal: public.entradas_gradas
-│   ├── EventoF1.java                    # Entidad JPA public.eventos_f1
-│   └── GranPremioTarget.java            # Catálogo maestro en memoria de los 19 Grandes Premios
+│   ├── Circuito.java                       # Entidad JPA public.circuitos
+│   ├── Ciudad.java                         # Entidad JPA public.ciudades
+│   ├── EntradaGrada.java                   # Entidad JPA principal: public.entradas_gradas
+│   ├── EventoF1.java                       # Entidad JPA public.eventos_f1
+│   └── GranPremioTarget.java               # Catálogo maestro en memoria de los 19 Grandes Premios
 ├── repository/
 │   ├── CircuitoRepository.java
 │   ├── CiudadRepository.java
-│   ├── EntradaGradaRepository.java      # Operaciones sobre entradas_gradas (Upsert)
-│   └── EventoF1Repository.java          # Búsqueda de eventos por año y circuito/ciudad
+│   ├── EntradaGradaRepository.java         # Operaciones sobre entradas_gradas (Upsert / Find)
+│   └── EventoF1Repository.java             # Búsqueda de eventos por año y circuito/ciudad
 ├── scheduler/
-│   └── TicketingSyncScheduler.java      # Ejecución programada con @Scheduled
+│   └── TicketingSyncScheduler.java         # Ejecución programada con @Scheduled
 ├── service/
-│   ├── TicketingClientService.java      # EXTRACT: Cliente SOAP JAX-WS
-│   └── TicketingSyncService.java        # LOAD / ORQUESTADOR: Sincronización completa
+│   ├── TicketingClientService.java         # EXTRACT & SOAP Client (consultar y reservar)
+│   ├── TicketingReservationService.java    # Orquestador de reservas (Read-only Supabase -> SOAP)
+│   └── TicketingSyncService.java           # LOAD / ORQUESTADOR ETL: Sincronización masiva
 └── shared/
     ├── exception/
-    │   └── GlobalExceptionHandler.java  # Control centralizado de errores HTTP
+    │   ├── GlobalExceptionHandler.java     # Control centralizado de errores HTTP
+    │   ├── ResourceNotFoundException.java  # Error 404 (Entrada o Evento inexistente)
+    │   └── StockInsuficienteException.java # Error 409 (Rechazo por stock en SOAP)
     └── response/
-        └── ApiResponse.java             # Envoltorio estándar de respuesta JSON
+        └── ApiResponse.java                # Envoltorio estándar de respuesta JSON
 ```
 
 ---
@@ -356,6 +363,95 @@ curl -X GET https://<tu-servicio>.onrender.com/api/microservicios/sync-tickets/c
       "ciudad": "Silverstone"
     }
   ]
+}
+```
+
+---
+
+### 5.4. Reserva de Entradas en el Sistema Legado SOAP
+
+Ejecuta la reserva de entradas y la deducción de inventario **directamente en el sistema legado SOAP**, sin modificar la base de datos de Supabase (la cual es gestionada de forma autónoma por el backend principal).
+
+#### Mecánica interna:
+1. Recibe el identificador `idEntrada` (UUID de Supabase) y la `cantidad` deseada.
+2. Consulta la tabla `public.entradas_gradas` en Supabase en **modo solo lectura** (`@Transactional(readOnly = true)`) para recuperar el nombre de la tribuna (`nombreTribuna`) y el identificador del evento (`idEvento`).
+3. Resuelve el código de carrera SOAP correspondiente (ej: `F1-2026-MAD`).
+4. Invoca la operación SOAP `reservarEntradas(codigoEvento, tribuna, cantidad)`.
+5. El sistema SOAP verifica el stock remanente, descuenta las entradas y retorna un código alfanumérico de confirmación (ej: `TKT-99812`).
+6. Si el stock es insuficiente, el servicio SOAP retorna un `SinStockFault`, el cual es traducido a una respuesta HTTP `409 Conflict`.
+
+* **Método**: `POST`
+* **Rutas disponibles**:
+  * `POST /api/microservicios/tickets/reservar` (Payload JSON)
+  * `POST /api/microservicios/tickets/{idEntrada}/reservar?cantidad={n}` (Path variable + Query param)
+
+#### Invocación Local (Payload JSON):
+```bash
+curl -X POST http://localhost:8083/api/microservicios/tickets/reservar \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEntrada": "55555555-0000-4000-8000-000000000003",
+    "cantidad": 2
+  }'
+```
+
+#### Invocación en Render (Payload JSON):
+```bash
+curl -X POST https://<tu-servicio>.onrender.com/api/microservicios/tickets/reservar \
+  -H "Content-Type: application/json" \
+  -d '{
+    "idEntrada": "55555555-0000-4000-8000-000000000003",
+    "cantidad": 2
+  }'
+```
+
+#### Invocación por Path Variable (Local / Render):
+```bash
+# Local
+curl -X POST "http://localhost:8083/api/microservicios/tickets/55555555-0000-4000-8000-000000000003/reservar?cantidad=2"
+
+# Render
+curl -X POST "https://<tu-servicio>.onrender.com/api/microservicios/tickets/55555555-0000-4000-8000-000000000003/reservar?cantidad=2"
+```
+
+#### Respuesta Exitosa (`200 OK`):
+```json
+{
+  "success": true,
+  "message": "Reserva confirmada en el sistema SOAP con código 'TKT-99812'",
+  "data": {
+    "codigoConfirmacion": "TKT-99812",
+    "idEntrada": "55555555-0000-4000-8000-000000000003",
+    "idEvento": "992ae124-3d59-4adb-9fd2-f0e825c605e8",
+    "codigoEvento": "F1-2026-MAD",
+    "carrera": "Madrid",
+    "nombreTribuna": "Paddock Club Madrid",
+    "tipo": "VIP",
+    "cantidad": 2,
+    "precioUnitarioUsd": 3500.00,
+    "precioTotalUsd": 7000.00,
+    "estado": "SUCCESS",
+    "mensaje": "Reserva confirmada exitosamente en el sistema de ticketing F1 (SOAP).",
+    "fechaReserva": "2026-10-03T16:54:12.268Z"
+  }
+}
+```
+
+#### Respuesta de Error por Stock Insuficiente (`409 Conflict`):
+```json
+{
+  "success": false,
+  "message": "Stock insuficiente para la tribuna 'Paddock Club Madrid' en el evento 'F1-2026-MAD'. Stock disponible: 1, cantidad solicitada: 5.",
+  "data": null
+}
+```
+
+#### Respuesta de Error si la Entrada no Existe (`404 Not Found`):
+```json
+{
+  "success": false,
+  "message": "Entrada no encontrado con id: '55555555-0000-4000-8000-000000000003'",
+  "data": null
 }
 ```
 

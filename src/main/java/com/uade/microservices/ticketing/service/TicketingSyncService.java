@@ -175,15 +175,16 @@ public class TicketingSyncService {
 
             EntradaGrada saved;
             if (existingOpt.isPresent()) {
-                // Entrada existente -> Actualizar precio y stock
+                // Entrada existente -> Actualizar nombre exacto de la tribuna, precio y stock desde SOAP
                 EntradaGrada existing = existingOpt.get();
-                existing.setPrecioUsd(transformed.getPrecioUsd());
+                existing.setNombreTribuna(transformed.getNombreTribuna());
                 existing.setStockDisponible(transformed.getStockDisponible());
+                existing.setPrecioUsd(transformed.getPrecioUsd());
                 existing.setTipo(transformed.getTipo());
                 saved = entradaGradaRepository.save(existing);
                 entradasActualizadas++;
-                log.debug("Entrada actualizada [UPSERT]: '{}' (id_entrada={}, evento={})",
-                        saved.getNombreTribuna(), saved.getIdEntrada(), idEvento);
+                log.info("Entrada actualizada en Supabase [UPSERT]: '{}' (stock_disponible={}, id_entrada={}, evento={})",
+                        saved.getNombreTribuna(), saved.getStockDisponible(), saved.getIdEntrada(), idEvento);
             } else {
                 // Entrada nueva -> Insertar
                 saved = entradaGradaRepository.save(transformed);

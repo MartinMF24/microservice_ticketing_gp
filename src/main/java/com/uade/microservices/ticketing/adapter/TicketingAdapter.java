@@ -54,8 +54,8 @@ public class TicketingAdapter {
         EntradaGrada entrada = new EntradaGrada();
         entrada.setIdEvento(idEvento);
 
-        // 1. Nombre de la tribuna (truncado a 100 caracteres según restricción de columna)
-        String tribuna = grada.getTribuna() != null ? grada.getTribuna().trim() : "Tribuna General";
+        // 1. Nombre de la tribuna: mantener exactamente el mismo nombre que tiene en el SOAP
+        String tribuna = grada.getTribuna() != null ? grada.getTribuna().trim() : "";
         if (tribuna.length() > 100) {
             tribuna = tribuna.substring(0, 100).trim();
         }
@@ -65,8 +65,8 @@ public class TicketingAdapter {
         BigDecimal precio = grada.getPrecioUsd() != null ? grada.getPrecioUsd() : BigDecimal.ZERO;
         entrada.setPrecioUsd(precio.setScale(2, RoundingMode.HALF_UP));
 
-        // 3. Stock disponible (no negativo)
-        entrada.setStockDisponible(Math.max(0, grada.getStock()));
+        // 3. Stock disponible: cargar en la columna stock_disponible exactamente el mismo número que en el stock del SOAP
+        entrada.setStockDisponible(grada.getStock());
 
         // 4. Regla de Negocio Crítica: Mapeo de categoría hacia el CHECK entradas_gradas_tipo_check
         entrada.setTipo(mapTipo(grada.getCategoria()));

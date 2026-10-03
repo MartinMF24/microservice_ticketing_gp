@@ -244,6 +244,65 @@ public enum GranPremioTarget {
         return Optional.empty();
     }
 
+    /**
+     * Busca el Gran Premio a partir del id_evento (UUID) registrado en Supabase.
+     */
+    public static Optional<GranPremioTarget> fromEventoId(UUID eventoId) {
+        if (eventoId == null) {
+            return Optional.empty();
+        }
+        for (GranPremioTarget target : values()) {
+            if (eventoId.equals(target.getEventoId())) {
+                return Optional.of(target);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Resuelve el Gran Premio a partir de una entidad EventoF1, verificando su UUID
+     * o por coincidencia de temporada, ciudad, circuito y alias.
+     */
+    public static Optional<GranPremioTarget> fromEventoF1(EventoF1 evento) {
+        if (evento == null) {
+            return Optional.empty();
+        }
+        if (evento.getIdEvento() != null) {
+            Optional<GranPremioTarget> byId = fromEventoId(evento.getIdEvento());
+            if (byId.isPresent()) {
+                return byId;
+            }
+        }
+
+        int season = evento.getTemporada() != null ? evento.getTemporada() : 2026;
+        String ciudadNombre = (evento.getCircuito() != null && evento.getCircuito().getCiudad() != null
+                && evento.getCircuito().getCiudad().getNombre() != null)
+                ? stripAccents(evento.getCircuito().getCiudad().getNombre()).toLowerCase()
+                : "";
+        String circuitoNombre = (evento.getCircuito() != null && evento.getCircuito().getNombre() != null)
+                ? stripAccents(evento.getCircuito().getNombre()).toLowerCase()
+                : "";
+
+        for (GranPremioTarget target : values()) {
+            if (target.getTemporada() == season) {
+                String targetNorm = stripAccents(target.getNombreCarrera()).toLowerCase();
+                if ((!ciudadNombre.isEmpty() && (ciudadNombre.contains(targetNorm) || targetNorm.contains(ciudadNombre)))
+                        || (!circuitoNombre.isEmpty() && circuitoNombre.contains(targetNorm))) {
+                    return Optional.of(target);
+                }
+                for (String alias : target.getAliases()) {
+                    String aliasNorm = stripAccents(alias).toLowerCase();
+                    if ((!ciudadNombre.isEmpty() && ciudadNombre.contains(aliasNorm))
+                            || (!circuitoNombre.isEmpty() && circuitoNombre.contains(aliasNorm))) {
+                        return Optional.of(target);
+                    }
+                }
+            }
+        }
+
+        return Optional.empty();
+    }
+
     private static String stripAccents(String s) {
         if (s == null) return "";
         return Normalizer.normalize(s, Normalizer.Form.NFD)
