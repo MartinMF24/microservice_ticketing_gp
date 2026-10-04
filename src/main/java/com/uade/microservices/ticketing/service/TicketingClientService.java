@@ -4,6 +4,7 @@ import com.uade.microservices.ticketing.config.TicketingSoapProperties;
 import com.uade.microservices.ticketing.model.GranPremioTarget;
 import com.uade.microservices.ticketing.shared.exception.StockInsuficienteException;
 import jakarta.xml.ws.WebServiceException;
+import jakarta.xml.ws.soap.SOAPFaultException;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -282,12 +283,36 @@ public class TicketingClientService {
                     : "SIN_STOCK";
 
             log.warn("Rechazo de reserva en SOAP [{}]: {}", errorCode, errorMsg);
-            throw new StockInsuficienteException(errorMsg);
+            throw new StockInsuficienteException(cleanFaultMessage(errorMsg));
+
+        } catch (SOAPFaultException ex) {
+            String faultString = (ex.getFault() != null && ex.getFault().getFaultString() != null)
+                    ? ex.getFault().getFaultString()
+                    : ex.getMessage();
+
+            if (isStockInsuficienteMessage(faultString)) {
+                String cleanMessage = cleanFaultMessage(faultString);
+                log.warn("Rechazo de reserva en SOAP por falta de stock (SOAPFault): {}", cleanMessage);
+                throw new StockInsuficienteException(cleanMessage);
+            }
+
+            log.error("Fallo SOAP no catalogado para {} - '{}': {}",
+                    codigoNormalizado, tribunaNormalizada, ex.getMessage(), ex);
+            throw new WebServiceException("Fallo en servicio SOAP para '"
+                    + codigoNormalizado + " / " + tribunaNormalizada + "': " + cleanFaultMessage(faultString), ex);
 
         } catch (Exception ex) {
             if (ex instanceof StockInsuficienteException) {
                 throw (StockInsuficienteException) ex;
             }
+
+            // Detección en cadena de excepciones anidadas
+            if (isStockInsuficienteException(ex)) {
+                String cleanMessage = extractStockErrorMessage(ex);
+                log.warn("Rechazo de reserva en SOAP por falta de stock detectado en excepción anidada: {}", cleanMessage);
+                throw new StockInsuficienteException(cleanMessage);
+            }
+
             log.error("Fallo al consumir la operación SOAP reservarEntradas para {} - '{}': {}",
                     codigoNormalizado, tribunaNormalizada, ex.getMessage(), ex);
 
@@ -300,5 +325,80 @@ public class TicketingClientService {
             throw new WebServiceException("No se pudo ejecutar la reserva en el servicio SOAP para '"
                     + codigoNormalizado + " / " + tribunaNormalizada + "': " + ex.getMessage(), ex);
         }
+    }
+
+    private String cleanFaultMessage(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "Stock insuficiente para realizar la reserva";
+        }
+        String clean = raw;
+        if (clean.contains("Client received SOAP Fault from server:")) {
+            clean = clean.substring(clean.indexOf("Client received SOAP Fault from server:") + "Client received SOAP Fault from server:".length()).trim();
+        }
+        if (clean.contains("Please see the server log")) {
+            clean = clean.substring(0, clean.indexOf("Please see the server log")).trim();
+        }
+        clean = clean.trim();
+        while (clean.endsWith(".")) {
+            clean = clean.substring(0, clean.length() - 1).trim();
+        }
+        return clean.isBlank() ? "Stock insuficiente para realizar la reserva" : clean;
+    }
+
+    private boolean isStockInsuficienteMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        return lower.contains("stock insuficiente")
+                || lower.contains("sin stock")
+                || lower.contains("stock no disponible")
+                || lower.contains("insuficiente para realizar la reserva")
+                || lower.contains("err-stock-insuficiente")
+                || lower.contains("err-sin-stock");
+    }
+
+    private boolean isStockInsuficienteException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SinStockFault_Exception || current instanceof StockInsuficienteException) {
+                return true;
+            }
+            if (current instanceof SOAPFaultException sfe && sfe.getFault() != null) {
+                if (isStockInsuficienteMessage(sfe.getFault().getFaultString())) {
+                    return true;
+                }
+            }
+            if (isStockInsuficienteMessage(current.getMessage())) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private String extractStockErrorMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SinStockFault_Exception sfe) {
+                if (sfe.getFaultInfo() != null && sfe.getFaultInfo().getMensaje() != null) {
+                    return cleanFaultMessage(sfe.getFaultInfo().getMensaje());
+                }
+                if (sfe.getMessage() != null && !sfe.getMessage().isBlank()) {
+                    return cleanFaultMessage(sfe.getMessage());
+                }
+            }
+            if (current instanceof SOAPFaultException sfe && sfe.getFault() != null) {
+                String faultString = sfe.getFault().getFaultString();
+                if (faultString != null && !faultString.isBlank()) {
+                    return cleanFaultMessage(faultString);
+                }
+            }
+            if (current.getMessage() != null && isStockInsuficienteMessage(current.getMessage())) {
+                return cleanFaultMessage(current.getMessage());
+            }
+            current = current.getCause();
+        }
+        return "Stock insuficiente para realizar la reserva";
     }
 }

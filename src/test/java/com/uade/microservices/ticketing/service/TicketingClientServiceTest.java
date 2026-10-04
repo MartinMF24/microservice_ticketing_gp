@@ -69,6 +69,18 @@ class TicketingClientServiceTest {
     }
 
     @Test
+    @DisplayName("reservarEntradas - Debe mapear WebServiceException con SOAP Fault a StockInsuficienteException")
+    void reservarEntradas_WebServiceException_StockInsuficiente() throws Exception {
+        String serverFaultMsg = "Client received SOAP Fault from server: Stock insuficiente para realizar la reserva Please see the server log to find more detail regarding exact cause of the failure.";
+        when(soapPort.reservarEntradas(any(ReservarEntradasRequest.class)))
+                .thenThrow(new WebServiceException(serverFaultMsg));
+
+        assertThatThrownBy(() -> clientService.reservarEntradas("F1-2027-POR", "Bancada Portimão", 99999))
+                .isInstanceOf(StockInsuficienteException.class)
+                .hasMessage("Stock insuficiente para realizar la reserva");
+    }
+
+    @Test
     @DisplayName("reservarEntradas - Debe generar código fallback si ocurre error de conexión y fallback está activo")
     void reservarEntradas_Fallback() throws Exception {
         when(soapPort.reservarEntradas(any(ReservarEntradasRequest.class)))

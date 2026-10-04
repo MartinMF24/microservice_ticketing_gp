@@ -84,8 +84,35 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ex.getMessage()));
     }
 
+    @ExceptionHandler(jakarta.xml.ws.soap.SOAPFaultException.class)
+    public ResponseEntity<ApiResponse<Void>> handleSoapFaultException(jakarta.xml.ws.soap.SOAPFaultException ex) {
+        String faultString = (ex.getFault() != null && ex.getFault().getFaultString() != null)
+                ? ex.getFault().getFaultString()
+                : ex.getMessage();
+
+        if (faultString != null && (faultString.toLowerCase().contains("stock") || faultString.toLowerCase().contains("insuficiente"))) {
+            log.warn("SOAP Fault de falta de stock capturado en handler global: {}", faultString);
+            return ResponseEntity
+                    .status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error("Stock insuficiente para realizar la reserva"));
+        }
+
+        log.error("Error SOAPFaultException: {}", ex.getMessage(), ex);
+        return ResponseEntity
+                .status(HttpStatus.BAD_GATEWAY)
+                .body(ApiResponse.error("Error en servicio SOAP: " + faultString));
+    }
+
     @ExceptionHandler(WebServiceException.class)
     public ResponseEntity<ApiResponse<Void>> handleWebServiceException(WebServiceException ex) {
+        String msg = ex.getMessage() != null ? ex.getMessage() : "";
+        if (msg.toLowerCase().contains("stock insuficiente") || msg.toLowerCase().contains("sin stock")) {
+            log.warn("WebServiceException por stock insuficiente capturada en handler global: {}", msg);
+            return ResponseEntity
+                    .status(HttpStatus.CONFLICT)
+                    .body(ApiResponse.error("Stock insuficiente para realizar la reserva"));
+        }
+
         log.error("Error de comunicación con el servicio legado SOAP F1 Ticketing: {}", ex.getMessage(), ex);
         String mensaje = "Error al comunicarse con el servicio legado SOAP F1 Ticketing: " + ex.getMessage()
                 + ". Verifique que el servicio SOAP esté activo en la URL configurada (TICKETING_WSDL_URL).";
