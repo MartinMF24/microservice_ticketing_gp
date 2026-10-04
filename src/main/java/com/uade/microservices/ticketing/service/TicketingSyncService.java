@@ -241,6 +241,16 @@ public class TicketingSyncService {
         log.info("Resolviendo id_evento en Supabase para año={}, ciudad/carrera='{}', codigo='{}'",
                 year, cityName, codigoEvento);
 
+        // 0. Si el catálogo maestro ya tiene el UUID preconfigurado (como 2026 y 2027), verificar en BD y usarlo directamente
+        if (targetOpt.isPresent() && targetOpt.get().getEventoId() != null) {
+            UUID predefinedId = targetOpt.get().getEventoId();
+            if (eventoF1Repository.existsById(predefinedId)) {
+                log.info("Evento F1 resuelto directamente por catálogo maestro: id_evento={}, codigo='{}'",
+                        predefinedId, codigoEvento);
+                return predefinedId;
+            }
+        }
+
         // 1. Intentar buscar en la base de datos por temporada con circuito y ciudad asociados
         List<EventoF1> eventosTemporada = eventoF1Repository.findByTemporadaWithCircuitoAndCiudad(year);
         if (!eventosTemporada.isEmpty()) {
@@ -264,7 +274,7 @@ public class TicketingSyncService {
             }
         }
 
-        // 3. Fallback a UUID preconfigurado en el catálogo maestro (ej: los 9 eventos de 2026 pre-cargados)
+        // 3. Fallback a UUID preconfigurado en el catálogo maestro
         if (targetOpt.isPresent() && targetOpt.get().getEventoId() != null) {
             UUID fallbackId = targetOpt.get().getEventoId();
             log.warn("Evento no localizado por coincidencia directa de nombre en BD. Usando UUID predeterminado del catálogo: {}",
@@ -284,30 +294,52 @@ public class TicketingSyncService {
             return false;
         }
 
-        String targetNormalized = stripAccents(cityName).toLowerCase();
-        String circuitoNombre = ev.getCircuito().getNombre() != null
-                ? stripAccents(ev.getCircuito().getNombre()).toLowerCase()
-                : "";
-        String ciudadNombre = (ev.getCircuito().getCiudad() != null && ev.getCircuito().getCiudad().getNombre() != null)
-                ? stripAccents(ev.getCircuito().getCiudad().getNombre()).toLowerCase()
-                : "";
-
-        // Coincidencia con nombre de ciudad
-        if (ciudadNombre.equals(targetNormalized) || ciudadNombre.contains(targetNormalized) || targetNormalized.contains(ciudadNombre)) {
+        // Coincidencia directa por UUID preconfigurado
+        if (target != null && target.getEventoId() != null && target.getEventoId().equals(ev.getIdEvento())) {
             return true;
         }
 
+        String targetNormalized = stripAccents(cityName).toLowerCase().trim();
+        String circuitoNombre = ev.getCircuito().getNombre() != null
+                ? stripAccents(ev.getCircuito().getNombre()).toLowerCase().trim()
+                : "";
+        String ciudadNombre = (ev.getCircuito().getCiudad() != null && ev.getCircuito().getCiudad().getNombre() != null)
+                ? stripAccents(ev.getCircuito().getCiudad().getNombre()).toLowerCase().trim()
+                : "";
+
+        // Coincidencia con nombre de ciudad
+        if (!ciudadNombre.isBlank()) {
+            if (ciudadNombre.equals(targetNormalized) || ciudadNombre.contains(targetNormalized)) {
+                return true;
+            }
+            if (targetNormalized.contains(ciudadNombre) && ciudadNombre.length() >= 4) {
+                return true;
+            }
+        }
+
         // Coincidencia con nombre del circuito
-        if (circuitoNombre.contains(targetNormalized)) {
-            return true;
+        if (!circuitoNombre.isBlank()) {
+            if (circuitoNombre.equals(targetNormalized) || circuitoNombre.contains(targetNormalized)) {
+                return true;
+            }
         }
 
         // Coincidencia por alias
         if (target != null) {
             for (String alias : target.getAliases()) {
-                String aliasNorm = stripAccents(alias).toLowerCase();
-                if (ciudadNombre.contains(aliasNorm) || circuitoNombre.contains(aliasNorm)) {
-                    return true;
+                String aliasNorm = stripAccents(alias).toLowerCase().trim();
+                if (aliasNorm.isBlank()) {
+                    continue;
+                }
+                // Si el alias es corto (<= 3 caracteres), requerir igualdad exacta para evitar falsos positivos (ej: 'UK' en 'Suzuka')
+                if (aliasNorm.length() <= 3) {
+                    if (ciudadNombre.equalsIgnoreCase(aliasNorm) || circuitoNombre.equalsIgnoreCase(aliasNorm)) {
+                        return true;
+                    }
+                } else {
+                    if (ciudadNombre.contains(aliasNorm) || circuitoNombre.contains(aliasNorm)) {
+                        return true;
+                    }
                 }
             }
         }

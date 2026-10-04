@@ -91,7 +91,7 @@ public enum GranPremioTarget {
             "Bahréin",
             2027,
             "2027-03-14",
-            null,
+            UUID.fromString("a3308380-0283-407f-b5ff-57162191f6dd"),
             List.of("Bahréin", "Bahrain", "Sakhir", "Manama")
     ),
     ARABIA_SAUDITA(
@@ -99,7 +99,7 @@ public enum GranPremioTarget {
             "Arabia Saudita",
             2027,
             "2027-03-21",
-            null,
+            UUID.fromString("7d9898d0-9288-4346-9f4b-f05c53ca97d7"),
             List.of("Arabia Saudita", "Saudi Arabia", "Yeda", "Jeddah")
     ),
     AUSTRALIA(
@@ -107,7 +107,7 @@ public enum GranPremioTarget {
             "Australia",
             2027,
             "2027-04-04",
-            null,
+            UUID.fromString("8dcec172-eff8-4d21-bd7e-3a2fa463f109"),
             List.of("Australia", "Melbourne", "Albert Park")
     ),
     JAPON(
@@ -115,7 +115,7 @@ public enum GranPremioTarget {
             "Japón",
             2027,
             "2027-04-11",
-            null,
+            UUID.fromString("a63a9d28-66c4-474b-bd18-7af4153742a8"),
             List.of("Japón", "Japon", "Suzuka", "Japan")
     ),
     CHINA(
@@ -123,7 +123,7 @@ public enum GranPremioTarget {
             "China",
             2027,
             "2027-04-18",
-            null,
+            UUID.fromString("7f18728f-2bd2-4a39-902f-ee793116a49c"),
             List.of("China", "Shanghai", "Shanghái")
     ),
     MIAMI(
@@ -131,7 +131,7 @@ public enum GranPremioTarget {
             "Miami",
             2027,
             "2027-05-02",
-            null,
+            UUID.fromString("be293f66-3c56-4026-82a2-1ff2f5745123"),
             List.of("Miami", "Florida")
     ),
     CANADA(
@@ -139,7 +139,7 @@ public enum GranPremioTarget {
             "Canadá",
             2027,
             "2027-05-23",
-            null,
+            UUID.fromString("92bca9cd-9adf-4719-8ef8-968dab71725d"),
             List.of("Canadá", "Canada", "Montreal", "Montréal")
     ),
     MONACO(
@@ -147,7 +147,7 @@ public enum GranPremioTarget {
             "Mónaco",
             2027,
             "2027-06-06",
-            null,
+            UUID.fromString("c70b90fa-9daf-4f4c-b0be-ee77cdf54cf4"),
             List.of("Mónaco", "Monaco", "Montecarlo", "Monte Carlo")
     ),
     PORTUGAL(
@@ -155,7 +155,7 @@ public enum GranPremioTarget {
             "Portugal",
             2027,
             "2027-06-20",
-            null,
+            UUID.fromString("ae4d7695-9767-4d39-94e2-3d02fb5e6236"),
             List.of("Portugal", "Portimão", "Portimao", "Algarve")
     ),
     GRAN_BRETANA(
@@ -163,8 +163,8 @@ public enum GranPremioTarget {
             "Gran Bretaña",
             2027,
             "2027-07-04",
-            null,
-            List.of("Gran Bretaña", "Great Britain", "Silverstone", "UK")
+            UUID.fromString("6a75b6a1-685a-40f5-a5d2-a94f7365d1a4"),
+            List.of("Gran Bretaña", "Great Britain", "Silverstone", "Reino Unido", "United Kingdom")
     );
 
     private final String codigoEvento;

@@ -158,4 +158,30 @@ class TicketingSyncServiceTest {
         assertEquals(mockEventoId, resolvedId);
         verify(eventoF1Repository, times(1)).findByTemporadaWithCircuitoAndCiudad(2026);
     }
+
+    @Test
+    @DisplayName("Resolución de Evento: Silverstone (F1-2027-SIL) no debe colisionar con Suzuka/Japón")
+    void shouldResolveSilverstoneCorrectlyWithoutMatchingSuzuka() {
+        UUID suzukaEventoId = UUID.fromString("a63a9d28-66c4-474b-bd18-7af4153742a8");
+        Ciudad ciudadSuzuka = new Ciudad(UUID.randomUUID(), "Suzuka");
+        Circuito circuitoSuzuka = new Circuito(UUID.randomUUID(), "Suzuka International Racing Course", ciudadSuzuka.getIdCiudad());
+        circuitoSuzuka.setCiudad(ciudadSuzuka);
+        EventoF1 eventoSuzuka = new EventoF1(suzukaEventoId, 2027, LocalDate.of(2027, 4, 11), LocalDate.of(2027, 4, 13), "Proximo", circuitoSuzuka.getIdCircuito());
+        eventoSuzuka.setCircuito(circuitoSuzuka);
+
+        UUID silverstoneEventoId = UUID.fromString("6a75b6a1-685a-40f5-a5d2-a94f7365d1a4");
+        Ciudad ciudadSilverstone = new Ciudad(UUID.randomUUID(), "Silverstone");
+        Circuito circuitoSilverstone = new Circuito(UUID.randomUUID(), "Silverstone Circuit", ciudadSilverstone.getIdCiudad());
+        circuitoSilverstone.setCiudad(ciudadSilverstone);
+        EventoF1 eventoSilverstone = new EventoF1(silverstoneEventoId, 2027, LocalDate.of(2027, 7, 4), LocalDate.of(2027, 7, 6), "Proximo", circuitoSilverstone.getIdCircuito());
+        eventoSilverstone.setCircuito(circuitoSilverstone);
+
+        // Se configuran ambos eventos en la temporada 2027, con Suzuka primero en la lista
+        when(eventoF1Repository.findByTemporadaWithCircuitoAndCiudad(2027))
+                .thenReturn(List.of(eventoSuzuka, eventoSilverstone));
+
+        UUID resolvedId = ticketingSyncService.resolveEventoId("F1-2027-SIL", List.of());
+
+        assertEquals(silverstoneEventoId, resolvedId, "Silverstone debió resolverse con su propio UUID y no con el de Suzuka");
+    }
 }
